@@ -1,4 +1,4 @@
-# IRON CAT RECICLADORA 
+# Flow of logistics & exchange RECICLADORA 
 
 ## Objetivo
 Se busca la eficiencia y el control administrativo del cliente, donde sea capaz de generar tickets con materiales registrados, merma, etc. El cliente cuenta con 5 Basculas para pesar de todo tipo de materiales (incluyendo camiones) el empleado pesara el material del cliente y se le entregara un ticket con el peso,material, merma, total, precio por producto, etc. el administrador estara en la caja listo para escanear el ticket y cobrar. este proceso se guarda en la base de datos.
