@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 
-import {UserRoundX } from 'lucide-react';
+import {UserRoundX, RefreshCw, Mail } from 'lucide-react';
 
 //import images
 import avatar2 from "assets/images/users/avatar-2.png"
@@ -17,6 +17,14 @@ const CustomerService = () => {
 	);
 	
 	const { clientsTickets } = useSelector(selectDataList);
+
+	const handleReload = useCallback(() => {
+		window.location.reload();
+	}, []);
+
+	const handleContact = useCallback(() => {
+		window.open('mailto:soporte@nimbuscloud.mx?subject=Soporte%20-%20Cliente%20frecuente', '_blank');
+	}, []);
 	
 	
 	
@@ -62,14 +70,13 @@ const CustomerService = () => {
 					{/*        </div>*/}
 					{/*    </div>*/}
 					{/*</div>*/}
-					{clientsTickets.length > 0 ? (
-						<>
-							<div className="h-80 overflow-y-auto">
+					<div className="h-80 overflow-y-auto flex items-center justify-center">
+						{clientsTickets.length > 0 ? (
+							<div className="w-full">
 								<ul className="divide-y divide-slate-200 dark:divide-zink-500 flex flex-col gap-2">
 									{clientsTickets && clientsTickets.map((entry: { client: any, count: number }, index: number) => (
 										<li key={entry.client.id}
 										    className="flex items-center gap-3 transition-colors duration-200 hover:bg-gray-100 dark:hover:bg-zinc-800 p-2 rounded-md"
-											// className="flex items-center gap-3 py-2 first:pt-0 last:pb-0"
 										>
 											<div className="size-8 rounded-full shrink-0 bg-slate-100 dark:bg-zink-600">
 												<img src={avatar2} alt="" className="size-8 rounded-full" />
@@ -85,20 +92,37 @@ const CustomerService = () => {
 									))}
 								</ul>
 							</div>
-						</>
-					) : (
-						<>
-							<div className="flex flex-col items-center justify-center p-8 bg-gray-50 dark:bg-gray-900 rounded-md shadow-md">
-								<UserRoundX size={60} className="text-gray-400 dark:text-gray-300 mb-4" />
-								<h3 className="text-xl font-semibold text-gray-700 dark:text-gray-100 mb-2">
-									No hay datos disponibles
-								</h3>
-								<p className="text-gray-500 dark:text-gray-400 text-center max-w-md">
-									Parece que no hay información para mostrar en este momento. Intenta refrescar la página o contacta a soporte si el problema persiste.
-								</p>
+						) : (
+							<div className="w-full flex items-center justify-center">
+								<div className="flex flex-col items-center justify-center w-full max-w-[420px] p-4 sm:p-6 bg-white dark:bg-zinc-800 rounded-md shadow-sm border border-slate-100 dark:border-zinc-700">
+									<UserRoundX size={56} className="text-slate-400 dark:text-slate-300 mb-3" />
+									<h3 className="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-1">Cliente más frecuente del mes</h3>
+									<p className="text-sm text-slate-500 dark:text-slate-400 text-center max-w-[420px] mb-4">
+										Este apartado muestra el cliente con más tickets en el mes. Actualmente no se ha registrado información para este periodo.
+									</p>
+									<div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto px-3 sm:px-0">
+										<button
+											type="button"
+											onClick={handleReload}
+											className="inline-flex items-center justify-center gap-2 w-full sm:w-auto px-3 py-2 rounded bg-sky-500 text-white hover:bg-sky-600"
+										>
+											<RefreshCw size={14} />
+											Recargar
+											</button>
+
+										<button
+											type="button"
+											onClick={handleContact}
+											className="inline-flex items-center justify-center gap-2 w-full sm:w-auto px-3 py-2 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"
+										>
+											<Mail size={14} />
+											Contactar Soporte
+											</button>
+									</div>
+								</div>
 							</div>
-						</>
-					)}
+						)}
+					</div>
 					
 				
 				</div>

@@ -38,9 +38,9 @@ if (appMode === 'production') {
 
 const scales = [
   { id: 1, name: "Bascula 1", img: scale },
-  { id: 3, name: "Bascula 2", img: scale },
-  { id: 4, name: "Bascula 3", img: scale },
-  { id: 2, name: "Bascula 4", img: scale },
+  // { id: 3, name: "Bascula 2", img: scale },
+  // { id: 4, name: "Bascula 3", img: scale },
+  // { id: 2, name: "Bascula 4", img: scale },
 ];
 
 interface DiscountCode {
@@ -87,6 +87,12 @@ interface WasteOption {
   value: number;
   label: string;
   wasteId: string;
+  img?: string;
+}
+
+interface AiResponse {
+  label: string;
+  confidence?: number; // 0..1
   img?: string;
 }
 
@@ -156,7 +162,66 @@ const ShoppingCart = () => {
   const [weights, setWeights] = useState<{ [key: number]: number }>({});
   const [selectedMaterials, setSelectedMaterials] = useState<{ [key: number]: string }>({});
   const [wasteOptions, setWasteOptions] = useState<WasteOption[]>([]);
+  const [aiResponses, setAiResponses] = useState<{ [key: number]: AiResponse }>({});
   const [clientSearch, setClientSearch] = useState('');
+  const [aiThresholdPct, setAiThresholdPct] = useState<number>(70); // umbral en porcentaje (0-100)
+  // Lista de materiales registrados (proporcionada por el usuario)
+  const registeredMaterialsList = [
+    'Lamina',
+    'Chatarra',
+    'Chatarra Larga',
+    'Bote',
+    'Perfil',
+    'Aluminio Grueso',
+    'Aluminio Delgado',
+    'Rin de Aluminio',
+    'Radiador de Aluminio',
+    'Radiador RVC',
+    'Radiador',
+    'Antimonio',
+    'Batería chica',
+    'Batería estandar',
+    'Baterías',
+    'Carton',
+    'Papel',
+    'Periodico',
+    'Bolsa',
+    'Papel triturado',
+    'Cable',
+    'Celulares',
+    'Cubetas',
+    'Spring',
+    'Cobre 1',
+    'PRUEBA'
+  ];
+
+  const normalize = (str: string) => {
+    return str
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^0-9a-zA-Z\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  };
+
+  const mapAiLabelToMaterial = (label: string) => {
+    if (!label) return null;
+    const normalizedLabel = normalize(label);
+
+    // 1) Exact match
+    for (const mat of registeredMaterialsList) {
+      if (normalize(mat) === normalizedLabel) return mat;
+    }
+
+    // 2) Inclusion match (registered inside label or label inside registered)
+    for (const mat of registeredMaterialsList) {
+      const nmat = normalize(mat);
+      if (normalizedLabel.includes(nmat) || nmat.includes(normalizedLabel)) return mat;
+    }
+
+    return null;
+  };
   const [selectedPriceTypes, setSelectedPriceTypes] = useState<{
     [key: number]: 'wholesale' | 'retail';
   }>({});
@@ -179,6 +244,25 @@ const ShoppingCart = () => {
     dispatch(onGetDiscountCodes());
     setAuthUser(JSON.parse(localStorage.getItem('authUser') || '{}'));
   }, [dispatch]);
+
+  // Simular detecciones de IA (útil para pruebas cuando no hay respuestas reales)
+  const simulateDetections = () => {
+    const sampleLabels = ['Pollo', 'Carne', 'Pescado', 'Res', 'Cerdo'];
+    const simulated: { [key: number]: AiResponse } = {};
+    scales.forEach((s, idx) => {
+      const label = sampleLabels[idx % sampleLabels.length];
+      // generar confianza variada para pruebas
+      const confidence = [0.95, 0.6, 0.4, 0.82, 0.25][idx % 5];
+      simulated[s.id] = { label, confidence };
+    });
+    setAiResponses(simulated);
+    showToast('Detección simulada aplicada');
+  };
+
+  const clearSimulatedDetections = () => {
+    setAiResponses({});
+    showToast('Detecciones simuladas limpiadas');
+  };
 
   const loadCart = useCallback(async (id: number) => {
     console.log("Loading existing cart with ID:", id);
@@ -422,6 +506,18 @@ const ShoppingCart = () => {
             return;
           }
           setWeights(prev => ({ ...prev, [item.id]: item.weight }));
+
+          // Si la IA envía un resultado de detección, guardarlo para mostrarlo en la UI
+          // Soporta campos `ai_material` o `detected_material` (varias fuentes)
+          const aiMaterial = item.ai_material || item.detected_material;
+          if (aiMaterial) {
+            const parsed: AiResponse = {
+              label: typeof aiMaterial === 'string' ? aiMaterial : aiMaterial.label || aiMaterial.name || String(aiMaterial),
+              confidence: aiMaterial.confidence !== undefined ? Number(aiMaterial.confidence) : undefined,
+              img: aiMaterial.img || undefined,
+            };
+            setAiResponses(prev => ({ ...prev, [item.id]: parsed }));
+          }
         });
       } else {
         if (data.weight === undefined) {
@@ -437,6 +533,17 @@ const ShoppingCart = () => {
           return;
         }
         setWeights((prev) => ({ ...prev, [data.id]: data.weight }));
+
+        // Manejar respuesta de IA en mensaje único
+        const aiMaterialSingle = data.ai_material || data.detected_material;
+        if (aiMaterialSingle) {
+          const parsedSingle: AiResponse = {
+            label: typeof aiMaterialSingle === 'string' ? aiMaterialSingle : aiMaterialSingle.label || aiMaterialSingle.name || String(aiMaterialSingle),
+            confidence: aiMaterialSingle.confidence !== undefined ? Number(aiMaterialSingle.confidence) : undefined,
+            img: aiMaterialSingle.img || undefined,
+          };
+          setAiResponses((prev) => ({ ...prev, [data.id]: parsedSingle }));
+        }
       }
     };
 
@@ -1159,7 +1266,35 @@ const ShoppingCart = () => {
             </div>
           )}
           
-          <h5 className="underline text-16 mb-5">Basculas</h5>
+          <div className="flex items-center justify-between mb-4">
+            <h5 className="underline text-16">Basculas</h5>
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-slate-600 dark:text-zink-200">Umbral IA</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={aiThresholdPct}
+                onChange={(e) => {
+                  const v = Math.min(100, Math.max(0, parseInt(e.target.value || '0')));
+                  setAiThresholdPct(isNaN(v) ? 0 : v);
+                }}
+                className="w-20 h-8 px-2 border rounded text-sm text-slate-700 dark:text-zink-100 bg-white dark:bg-zink-700 border-slate-200 dark:border-zink-500"
+              />
+              <button
+                onClick={simulateDetections}
+                className="btn bg-emerald-500 text-white text-sm px-2 py-1 rounded hover:bg-emerald-600"
+              >
+                Simular detección
+              </button>
+              <button
+                onClick={clearSimulatedDetections}
+                className="btn bg-slate-100 text-slate-700 text-sm px-2 py-1 rounded hover:bg-slate-200 dark:bg-zink-600 dark:text-zink-100"
+              >
+                Limpiar
+              </button>
+            </div>
+          </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
             <Select
               options={filteredClients}
@@ -1208,13 +1343,66 @@ const ShoppingCart = () => {
               }}
             />
           </div>
-          {scales.map((scale) => (
+          {scales.map((scale) => {
+            const ai = aiResponses[scale.id];
+            return (
             <div key={scale.id} className="card p-4 mb-4 bg-white shadow rounded-lg">
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 <img src={scale.img} alt={scale.name} className="w-full max-w-[100px] h-auto rounded-lg mx-auto" />
                 <div>
                   <h5>{scale.name}</h5>
                   <p className="text-slate-500">Peso: {weights[scale.id] || 0} kg</p>
+                  {/* Visualización de la respuesta del modelo de IA (si existe) */}
+                  {ai && (
+                    <div className="mt-2 p-2 border rounded-md bg-slate-50 dark:bg-zink-700 dark:border-zink-500">
+                      <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  {ai.img && (
+                                    <img src={ai.img} alt={ai.label} className="w-7 h-7 rounded-full" />
+                                  )}
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <div className="text-sm font-medium text-slate-700 dark:text-zink-100">Detectado: {ai.label}</div>
+                                      {ai.confidence !== undefined && (
+                                        (() => {
+                                          const pct = Math.round((ai.confidence || 0) * 100);
+                                          const above = pct >= aiThresholdPct;
+                                          return (
+                                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${above ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30' : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30'}`}>
+                                              {pct}%
+                                            </span>
+                                          );
+                                        })()
+                                      )}
+                                    </div>
+                                    {ai.confidence !== undefined && ai.confidence < (aiThresholdPct / 100) && (
+                                      <div className="text-xs text-yellow-600 dark:text-yellow-400">Confianza por debajo del umbral</div>
+                                    )}
+                                  </div>
+                                </div>
+                                <div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      // Intentar mapear la etiqueta de la IA a un material registrado
+                                      const mapped = mapAiLabelToMaterial(ai.label);
+                                      if (mapped) {
+                                        setSelectedMaterials({ ...selectedMaterials, [scale.id]: mapped });
+                                        showToast(`Material mapeado: ${mapped}`);
+                                      } else {
+                                        // fallback: usar la etiqueta cruda
+                                        setSelectedMaterials({ ...selectedMaterials, [scale.id]: ai.label });
+                                        showToast('No se encontró correspondencia; se usó la etiqueta de IA');
+                                      }
+                                    }}
+                                    className="text-xs bg-blue-500 text-white px-2 py-1 rounded-md hover:bg-blue-600"
+                                  >
+                                    Usar detección
+                                  </button>
+                                </div>
+                      </div>
+                    </div>
+                  )}
                   <Select
                     options={materials}
                     isSearchable={true}
@@ -1280,7 +1468,8 @@ const ShoppingCart = () => {
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
         <div className="xl:col-span-3">
           <div className="card p-4 bg-white shadow rounded-lg">

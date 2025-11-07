@@ -38,9 +38,9 @@ if (appMode === 'production') {
 
 const scales = [
   { id: 1, name: "Bascula 1", img: scale },
-  { id: 3, name: "Bascula 2", img: scale },
-  { id: 4, name: "Bascula 3", img: scale },
-  { id: 2, name: "Bascula 4", img: scale },
+  // { id: 3, name: "Bascula 2", img: scale },
+  // { id: 4, name: "Bascula 3", img: scale },
+  // { id: 2, name: "Bascula 4", img: scale },
 ];
 
 interface DiscountCode {

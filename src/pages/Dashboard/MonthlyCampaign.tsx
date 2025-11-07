@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { PackageSearch, WifiOff } from 'lucide-react';
+import React, { useState, useCallback } from 'react';
+import { PackageSearch, WifiOff, RefreshCw, Mail } from 'lucide-react';
 import { createSelector } from "reselect";
 import { useSelector } from "react-redux";
 
@@ -43,6 +43,14 @@ const MonthlyCampaign = () => {
   const { productsSaleCharts, productImages } = useSelector(selectDataList);
   const [ticketType, setTicketType] = useState<'sale' | 'shop'>('sale');
 
+  const handleReload = useCallback(() => {
+    window.location.reload();
+  }, []);
+
+  const handleContact = useCallback(() => {
+    window.open('mailto:soporte@nimbuscloud.mx?subject=Soporte%20-%20Historial%20mensual', '_blank');
+  }, []);
+
   const months = [
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
@@ -55,64 +63,89 @@ const MonthlyCampaign = () => {
 
   return (
     <div className="col-span-12 lg:col-span-6 order-[13] 2xl:order-1 card 2xl:col-span-3">
-      {hasData ? (
-        <div className="card-body">
-          <div className="flex w-full items-center justify-between mb-4">
-            <h6 className="mb-3 text-15 font-medium">
-              Histórico de {ticketType === 'sale' ? 'venta' : 'compra'} en {currentMonth}
-            </h6>
-            <button
-              onClick={() => setTicketType(ticketType === 'sale' ? 'shop' : 'sale')}
-              type="button"
-              className="bg-white border-dashed text-sky-500 btn border-sky-500 hover:text-sky-500 hover:bg-sky-50 hover:border-sky-600 focus:text-sky-600 focus:bg-sky-50 focus:border-sky-600 active:text-sky-600 active:bg-sky-50 active:border-sky-600 dark:bg-zink-700 dark:ring-sky-400/20 dark:hover:bg-sky-800/20 dark:focus:bg-sky-800/20 dark:active:bg-sky-800/20"
-            >
-              <i className="align-baseline ltr:pr-1 rtl:pl-1 ri-refresh-line"></i>
-              {ticketType === 'sale' ? 'Compra' : 'Venta'}
-            </button>
-          </div>
-          <div className="h-80 overflow-y-auto">
-            <ul className="flex flex-col gap-2">
-              {Object.values(currentData).map((product) => (
-                <React.Fragment key={product.product_id}>
-                  <li className="flex items-center gap-3 transition-colors duration-200 hover:bg-gray-100 dark:hover:bg-zinc-800 p-2 rounded-md">
-                    <div className="flex items-center justify-center size-8 text-red-500 bg-red-100 rounded-md dark:bg-red-500/20 shrink-0">
-                      {productImages[product.product_id] ? (
-                        <img
-                          className="size-10"
-                          src={productImages[product.product_id].img}
-                          alt={product.product_name || 'Producto'}
-                        />
-                      ) : (
-                        <WifiOff className="size-5" />
-                      )}
-                    </div>
-                    <h6 className="grow">{product.product_name}</h6>
-                    <div className="flex flex-col items-end whitespace-nowrap text-right">
-                      <p className="text-slate-500 dark:text-zink-200 text-sm">
-                        $ {product.totalAmount?.toFixed(2)}
-                      </p>
-                      <p className="text-green-500 text-sm">
-                        {product.totalWeight?.toFixed(2)} KG
-                      </p>
-                    </div>
-                  </li>
-                  <hr className="border-t border-gray-200 dark:border-zinc-700" />
-                </React.Fragment>
-              ))}
-            </ul>
-          </div>
+      <div className="card-body">
+        <div className="flex w-full items-center justify-between mb-4">
+          <h6 className="mb-3 text-15 font-medium">
+            Histórico de {ticketType === 'sale' ? 'venta' : 'compra'} en {currentMonth}
+          </h6>
+          <button
+            onClick={() => setTicketType(ticketType === 'sale' ? 'shop' : 'sale')}
+            type="button"
+            className="bg-white border-dashed text-sky-500 btn border-sky-500 hover:text-sky-500 hover:bg-sky-50 hover:border-sky-600 focus:text-sky-600 focus:bg-sky-50 focus:border-sky-600 active:text-sky-600 active:bg-sky-50 active:border-sky-600 dark:bg-zink-700 dark:ring-sky-400/20 dark:hover:bg-sky-800/20 dark:focus:bg-sky-800/20 dark:active:bg-sky-800/20"
+          >
+            <i className="align-baseline ltr:pr-1 rtl:pl-1 ri-refresh-line"></i>
+            {ticketType === 'sale' ? 'Venta' : 'Compra'}
+          </button>
         </div>
-      ) : (
-        <div className="flex flex-col items-center justify-center p-8 bg-gray-50 dark:bg-gray-900 rounded-md shadow-md">
-          <PackageSearch size={60} className="text-gray-400 dark:text-gray-300 mb-4" />
-          <h3 className="text-xl font-semibold text-gray-700 dark:text-gray-100 mb-2">
-            No hay historial de {ticketType === 'sale' ? 'venta' : 'compra'}
-          </h3>
-          <p className="text-gray-500 dark:text-gray-400 text-center max-w-md">
-            Parece que no hay información para mostrar en este momento. Intenta refrescar la página o contacta a soporte si el problema persiste.
-          </p>
+
+        <div className="h-80 overflow-y-auto flex items-center justify-center">
+          {hasData ? (
+            <div className="w-full">
+              <ul className="flex flex-col gap-2">
+                {Object.values(currentData).map((product) => (
+                  <React.Fragment key={product.product_id}>
+                    <li className="flex items-center gap-3 transition-colors duration-200 hover:bg-gray-100 dark:hover:bg-zinc-800 p-2 rounded-md">
+                      <div className="flex items-center justify-center size-8 text-red-500 bg-red-100 rounded-md dark:bg-red-500/20 shrink-0">
+                        {productImages[product.product_id] ? (
+                          <img
+                            className="size-10"
+                            src={productImages[product.product_id].img}
+                            alt={product.product_name || 'Producto'}
+                          />
+                        ) : (
+                          <WifiOff className="size-5" />
+                        )}
+                      </div>
+                      <h6 className="grow">{product.product_name}</h6>
+                      <div className="flex flex-col items-end whitespace-nowrap text-right">
+                        <p className="text-slate-500 dark:text-zink-200 text-sm">
+                          $ {product.totalAmount?.toFixed(2)}
+                        </p>
+                        <p className="text-green-500 text-sm">
+                          {product.totalWeight?.toFixed(2)} KG
+                        </p>
+                      </div>
+                    </li>
+                    <hr className="border-t border-gray-200 dark:border-zinc-700" />
+                  </React.Fragment>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <div className="w-full flex items-center justify-center">
+              <div className="flex flex-col items-center justify-center w-full max-w-[520px] p-4 sm:p-6 bg-white dark:bg-zinc-800 rounded-md shadow-sm border border-slate-100 dark:border-zinc-700">
+                <PackageSearch size={52} className="text-slate-400 dark:text-slate-300 mb-3" />
+                <h3 className="text-base sm:text-lg font-semibold text-slate-800 dark:text-slate-100 mb-1 text-center">
+                  Historial mensual — {ticketType === 'sale' ? 'venta' : 'compra'}
+                </h3>
+                <p className="text-sm sm:text-sm text-slate-500 dark:text-slate-400 text-center max-w-full sm:max-w-[460px] mb-4 px-3 sm:px-0">
+                  Este apartado muestra el histórico por producto para {currentMonth}. Actualmente no se ha registrado información para este periodo.
+                </p>
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto px-3 sm:px-0">
+                  <button
+                    type="button"
+                    onClick={handleReload}
+                    className="inline-flex items-center justify-center gap-2 w-full sm:w-auto px-3 py-2 rounded bg-sky-500 text-white hover:bg-sky-600"
+                  >
+                    <RefreshCw size={14} />
+                    Recargar
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleContact}
+                    className="inline-flex items-center justify-center gap-2 w-full sm:w-auto px-3 py-2 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"
+                  >
+                    <Mail size={14} />
+                    Contactar Soporte
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 };
