@@ -27,13 +27,16 @@ import Modal from "Common/Components/Modal";
 const appMode: any = process.env.REACT_APP_MODE;
 let ws_ip: any;
 let PRINTER_IP: any;
+let ml_ws_ip: any;
 
 if(appMode === 'production'){
   ws_ip = process.env.REACT_APP_WS_URL_PROD;
   PRINTER_IP = process.env.REACT_APP_PRINTER_PROD;
+  ml_ws_ip = process.env.REACT_APP_ML_WS_URL_PROD;
 }else{
   ws_ip = process.env.REACT_APP_WS_URL_DEV;
   PRINTER_IP = process.env.REACT_APP_PRINTER_DEV;
+  ml_ws_ip = process.env.REACT_APP_ML_WS_URL_DEV;
 }
 
 const scales = [
@@ -126,6 +129,8 @@ const SalesCart = () => {
   const navigate = useNavigate();
   const { cartId } = useParams<{ cartId: string }>();
   const vehicleUpdateTimeout = useRef<NodeJS.Timeout | null>(null);
+  const detectionDebounceTimeout = useRef<NodeJS.Timeout | null>(null);
+  const lastAppliedMaterial = useRef<number | null>(null);
 
   const selectDataList = createSelector(
     (state: any) => state.MATERIALManagement,
@@ -178,6 +183,10 @@ const SalesCart = () => {
   const [largeModal, setLargeModal] = useState(false);
   const [discountCode, setDiscountCode] = useState<DiscountCode | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingDetectedMaterial, setPendingDetectedMaterial] = useState<number | null>(null);
+  const [lastDetectionLabel, setLastDetectionLabel] = useState<string | null>(null);
+  const [useAIAutoApply, setUseAIAutoApply] = useState<boolean>(false);
+  const useAIAutoApplyRef = useRef<boolean>(useAIAutoApply);
   const [isEditingExistingCart, setIsEditingExistingCart] = useState(false);
   const [currentCartId, setCurrentCartId] = useState<number | null>(null);
   const [transactionType, setTransactionType] = useState<'shop' | 'sale'>('sale');
@@ -189,6 +198,13 @@ const SalesCart = () => {
     dispatch(onGetDiscountCodes());
     setAuthUser(JSON.parse(localStorage.getItem('authUser') || '{}'));
   }, [dispatch]);
+
+  // Keep a ref synchronized with the auto-apply flag so the ML websocket
+  // handler (a long-lived closure) can read the current setting without
+  // needing to recreate the websocket on every toggle.
+  useEffect(() => {
+    useAIAutoApplyRef.current = useAIAutoApply;
+  }, [useAIAutoApply]);
 
   const loadExistingCart = useCallback(async (id: number) => {
     try {
@@ -419,10 +435,15 @@ const SalesCart = () => {
     const ws = new WebSocket(ws_ip);
 
     ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+      let data: any;
+      try {
+        data = JSON.parse(event.data);
+      } catch (err) {
+        data = event.data;
+      }
 
       if (Array.isArray(data)) {
-        data.forEach(item => {
+        data.forEach((item: any) => {
           if (item.weight === undefined) {
             console.error("El campo 'weight' no está definido en el ítem:", item);
             return;
@@ -435,6 +456,7 @@ const SalesCart = () => {
             console.error("El peso no es un número ni una cadena:", item.weight);
             return;
           }
+
           setWeights(prev => ({ ...prev, [item.id]: item.weight }));
         });
       } else {
@@ -450,6 +472,7 @@ const SalesCart = () => {
           console.error("El peso no es un número ni una cadena:", data.weight);
           return;
         }
+
         setWeights((prev) => ({ ...prev, [data.id]: data.weight }));
       }
     };
@@ -457,15 +480,27 @@ const SalesCart = () => {
     return () => ws.close();
   }, []);
 
+  // Helper to show toasts in a non-noisy way
   const showToast = (message: string) => {
     if (!toast.isActive('unique-toast')) {
-      toast.info(message, { 
-        toastId: 'unique-toast',
-        autoClose: 2000 
-      });
+      toast.info(message, { toastId: 'unique-toast', autoClose: 2000 });
     }
   };
 
+  const applyPendingSuggestion = useCallback(() => {
+    if (!pendingDetectedMaterial) return;
+    const match = materials.find((m) => Number(m.value) === Number(pendingDetectedMaterial));
+    if (match) {
+      const scaleId = scales[0]?.id || 1;
+      setSelectedMaterials((prev) => ({ ...prev, [scaleId]: match.label }));
+      showToast(`Sugerencia IA aplicada: ${match.label}`);
+      lastAppliedMaterial.current = pendingDetectedMaterial;
+      setPendingDetectedMaterial(null);
+      setLastDetectionLabel(null);
+    }
+  }, [pendingDetectedMaterial, materials]);
+
+  // Clean handleAddToCart (used by the "Registrar al carrito" button)
   const handleAddToCart = async (scaleId: number) => {
     const material = materials.find((m) => m.label === selectedMaterials[scaleId]);
     if (!material) {
@@ -482,33 +517,23 @@ const SalesCart = () => {
     const price = Number(selectedPriceType === 'wholesale' ? material.wholesale_price : material.retail_price);
     const total = weight * price;
 
-    // Si estamos editando un carrito existente, usar ese cart_id
-    // Si no, necesitamos crear un carrito temporal o usar un ID por defecto
     let cartIdToUse = currentCartId;
-    
-    if (!isEditingExistingCart) {
-      // Para carritos nuevos, puedes crear un carrito temporal o usar un ID especial
-      // Esto depende de cómo manejes los carritos nuevos en tu backend
-      cartIdToUse = 0; // O el ID que uses para carritos temporales
-    }
+    if (!isEditingExistingCart) cartIdToUse = 0;
 
     try {
-      // Llamar al endpoint insertProductInCart
       const insertPayload = {
         cart_id: cartIdToUse,
         product_id: material.value,
         weight: weight,
-        waste: 0, // Inicialmente sin merma
+        waste: 0,
       };
 
       const result = await dispatch(onInsertProductInCart(insertPayload));
-      
       if (result.error) {
         toast.error("Error al agregar producto al carrito");
         return;
       }
 
-      // Crear el item para el estado local
       const newItem: CartItem = {
         id: scaleId,
         material: material.label,
@@ -520,22 +545,101 @@ const SalesCart = () => {
         waste: 0,
         type: selectedPriceType,
         usePredefinedMerma: false,
-        cart_product_id: result.payload || result.payload?.id, // ID retornado por el backend
+        cart_product_id: result.payload || result.payload?.id,
       };
 
-      setCart([...cart, newItem]);
+      setCart((prev) => [...prev, newItem]);
 
-      // Si es un carrito nuevo y obtuvimos un cart_id del backend, actualizarlo
       if (!isEditingExistingCart && result.payload?.cart_id) {
         setCurrentCartId(result.payload.cart_id);
         setIsEditingExistingCart(true);
       }
-      
     } catch (error) {
       console.error("Error adding product to cart:", error);
       toast.error("Error al agregar producto al carrito");
     }
   };
+
+  // ML websocket: listens for material detections and offers/apply suggestions
+  useEffect(() => {
+    if (!ml_ws_ip) return;
+
+    let mlWs: WebSocket | null = null;
+    try {
+      mlWs = new WebSocket(ml_ws_ip);
+    } catch (err) {
+      console.error('Error opening ML websocket', err);
+      return;
+    }
+
+    mlWs.onopen = () => {
+      console.log('ML websocket connected:', ml_ws_ip);
+    };
+
+    mlWs.onmessage = (event) => {
+      let payload: any;
+      try {
+        payload = JSON.parse(event.data);
+      } catch (e) {
+        payload = event.data;
+      }
+
+      const rawDetection = (payload && payload.material) ? payload.material : payload;
+      if (!rawDetection) return;
+
+      const detection = String(rawDetection).trim().toLowerCase();
+
+      // Mapping: PAPER -> 28, PLASTIC -> 57, GLASS -> 58 (match ShoppingCart mapping)
+      let targetValue: number | null = null;
+      if (detection.includes('paper') || detection.includes('papel')) targetValue = 28;
+      if (detection.includes('plastic') || detection.includes('plast')) targetValue = 57;
+      if (detection.includes('glass') || detection.includes('vidrio')) targetValue = 58;
+
+      if (!targetValue) return;
+
+      if (detectionDebounceTimeout.current) {
+        clearTimeout(detectionDebounceTimeout.current);
+      }
+
+      setLastDetectionLabel(String(rawDetection).toUpperCase());
+
+      detectionDebounceTimeout.current = setTimeout(() => {
+        if (lastAppliedMaterial.current === targetValue) {
+          setPendingDetectedMaterial(targetValue);
+          return;
+        }
+
+        setPendingDetectedMaterial(targetValue);
+
+        if (useAIAutoApplyRef.current) {
+          const matched = materials.find((m) => Number(m.value) === Number(targetValue));
+          if (matched) {
+            const scaleId = scales[0]?.id || 1;
+            setSelectedMaterials((prev) => ({ ...prev, [scaleId]: matched.label }));
+            if (lastAppliedMaterial.current !== targetValue) {
+              showToast(`Sugerencia IA aplicada: ${matched.label}`);
+              lastAppliedMaterial.current = targetValue;
+            }
+            setPendingDetectedMaterial(null);
+            setLastDetectionLabel(null);
+          }
+        }
+      }, 1000);
+    };
+
+    mlWs.onclose = () => {
+      console.log('ML websocket closed');
+    };
+
+    mlWs.onerror = (err) => {
+      console.error('ML websocket error', err);
+    };
+
+    return () => {
+      if (mlWs) mlWs.close();
+      if (detectionDebounceTimeout.current) clearTimeout(detectionDebounceTimeout.current);
+    };
+  }, [ml_ws_ip, materials]);
 
   const handleDeleteItem = async (index: number) => {
     const itemToDelete = cart[index];
@@ -1015,6 +1119,31 @@ const SalesCart = () => {
           )}
           
           <h5 className="underline text-16 mb-5">Basculas</h5>
+
+          {/* AI suggestion compact panel - subtle, non-intrusive, responsive */}
+          <div className="mb-4">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="text-sm text-slate-500">
+                Sugerencia IA: <span className="font-medium text-slate-800 dark:text-zinc-100">{lastDetectionLabel || '—'}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={applyPendingSuggestion}
+                  disabled={!pendingDetectedMaterial}
+                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded text-sm ${pendingDetectedMaterial ? 'bg-sky-500 text-white hover:bg-sky-600' : 'bg-slate-50 dark:bg-zinc-700 text-slate-400 cursor-not-allowed border border-slate-100 dark:border-zinc-700'}`}
+                >
+                  Aplicar sugerencia
+                </button>
+
+                <label className="inline-flex items-center gap-2 text-sm text-slate-500">
+                  <input type="checkbox" checked={useAIAutoApply} onChange={(e) => setUseAIAutoApply(e.target.checked)} className="form-checkbox" />
+                  <span className="whitespace-nowrap">Aplicar automáticamente</span>
+                </label>
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-slate-400 max-w-xl">La IA sugiere automáticamente el material detectado. Puedes aplicar la sugerencia manualmente o activar el modo automático. Las notificaciones se muestran sólo cuando se aplica una sugerencia.</p>
+          </div>
           {scales.map((scale) => (
             <div key={scale.id} className="card p-4 mb-4 bg-white shadow rounded-lg">
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

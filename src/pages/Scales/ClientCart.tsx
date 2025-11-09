@@ -27,13 +27,16 @@ import Modal from "Common/Components/Modal";
 const appMode : any = process.env.REACT_APP_MODE;
 let ws_ip: any;
 let PRINTER_IP: any;
+let ml_ws_ip: any;
 
 if (appMode === 'production') {
   ws_ip = process.env.REACT_APP_WS_URL_PROD;
   PRINTER_IP = process.env.REACT_APP_PRINTER_PROD;
+  ml_ws_ip = process.env.REACT_APP_ML_WS_URL_PROD;
 } else {
   ws_ip = process.env.REACT_APP_WS_URL_DEV;
   PRINTER_IP = process.env.REACT_APP_PRINTER_DEV;
+  ml_ws_ip = process.env.REACT_APP_ML_WS_URL_DEV;
 }
 
 const scales = [
@@ -155,6 +158,8 @@ const ShoppingCart = () => {
   const { dataList } = useSelector(selectDiscountCodeList);
 
   const vehicleUpdateTimeout = useRef<NodeJS.Timeout | null>(null);
+  const detectionDebounceTimeout = useRef<NodeJS.Timeout | null>(null);
+  const lastAppliedMaterial = useRef<number | null>(null);
   const [materials, setMaterials] = useState<MaterialOption[]>([]);
   const [selectedClient, setSelectedClient] = useState<ClientOption | null>(null);
   const [transactionType, setTransactionType] = useState<'shop' | 'sale' | null>(null);
@@ -162,66 +167,11 @@ const ShoppingCart = () => {
   const [weights, setWeights] = useState<{ [key: number]: number }>({});
   const [selectedMaterials, setSelectedMaterials] = useState<{ [key: number]: string }>({});
   const [wasteOptions, setWasteOptions] = useState<WasteOption[]>([]);
-  const [aiResponses, setAiResponses] = useState<{ [key: number]: AiResponse }>({});
+  const [pendingDetectedMaterial, setPendingDetectedMaterial] = useState<number | null>(null);
+  const [lastDetectionLabel, setLastDetectionLabel] = useState<string | null>(null);
+  const [useAIAutoApply, setUseAIAutoApply] = useState<boolean>(false);
+  const useAIAutoApplyRef = useRef<boolean>(useAIAutoApply);
   const [clientSearch, setClientSearch] = useState('');
-  const [aiThresholdPct, setAiThresholdPct] = useState<number>(70); // umbral en porcentaje (0-100)
-  // Lista de materiales registrados (proporcionada por el usuario)
-  const registeredMaterialsList = [
-    'Lamina',
-    'Chatarra',
-    'Chatarra Larga',
-    'Bote',
-    'Perfil',
-    'Aluminio Grueso',
-    'Aluminio Delgado',
-    'Rin de Aluminio',
-    'Radiador de Aluminio',
-    'Radiador RVC',
-    'Radiador',
-    'Antimonio',
-    'Batería chica',
-    'Batería estandar',
-    'Baterías',
-    'Carton',
-    'Papel',
-    'Periodico',
-    'Bolsa',
-    'Papel triturado',
-    'Cable',
-    'Celulares',
-    'Cubetas',
-    'Spring',
-    'Cobre 1',
-    'PRUEBA'
-  ];
-
-  const normalize = (str: string) => {
-    return str
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^0-9a-zA-Z\s]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase();
-  };
-
-  const mapAiLabelToMaterial = (label: string) => {
-    if (!label) return null;
-    const normalizedLabel = normalize(label);
-
-    // 1) Exact match
-    for (const mat of registeredMaterialsList) {
-      if (normalize(mat) === normalizedLabel) return mat;
-    }
-
-    // 2) Inclusion match (registered inside label or label inside registered)
-    for (const mat of registeredMaterialsList) {
-      const nmat = normalize(mat);
-      if (normalizedLabel.includes(nmat) || nmat.includes(normalizedLabel)) return mat;
-    }
-
-    return null;
-  };
   const [selectedPriceTypes, setSelectedPriceTypes] = useState<{
     [key: number]: 'wholesale' | 'retail';
   }>({});
@@ -245,24 +195,7 @@ const ShoppingCart = () => {
     setAuthUser(JSON.parse(localStorage.getItem('authUser') || '{}'));
   }, [dispatch]);
 
-  // Simular detecciones de IA (útil para pruebas cuando no hay respuestas reales)
-  const simulateDetections = () => {
-    const sampleLabels = ['Pollo', 'Carne', 'Pescado', 'Res', 'Cerdo'];
-    const simulated: { [key: number]: AiResponse } = {};
-    scales.forEach((s, idx) => {
-      const label = sampleLabels[idx % sampleLabels.length];
-      // generar confianza variada para pruebas
-      const confidence = [0.95, 0.6, 0.4, 0.82, 0.25][idx % 5];
-      simulated[s.id] = { label, confidence };
-    });
-    setAiResponses(simulated);
-    showToast('Detección simulada aplicada');
-  };
-
-  const clearSimulatedDetections = () => {
-    setAiResponses({});
-    showToast('Detecciones simuladas limpiadas');
-  };
+  // (Removed simulation helpers; ML detections come from the ML websocket)
 
   const loadCart = useCallback(async (id: number) => {
     console.log("Loading existing cart with ID:", id);
@@ -509,15 +442,7 @@ const ShoppingCart = () => {
 
           // Si la IA envía un resultado de detección, guardarlo para mostrarlo en la UI
           // Soporta campos `ai_material` o `detected_material` (varias fuentes)
-          const aiMaterial = item.ai_material || item.detected_material;
-          if (aiMaterial) {
-            const parsed: AiResponse = {
-              label: typeof aiMaterial === 'string' ? aiMaterial : aiMaterial.label || aiMaterial.name || String(aiMaterial),
-              confidence: aiMaterial.confidence !== undefined ? Number(aiMaterial.confidence) : undefined,
-              img: aiMaterial.img || undefined,
-            };
-            setAiResponses(prev => ({ ...prev, [item.id]: parsed }));
-          }
+          // ignore in-band ai_material from weight socket; ML detections are handled by the dedicated ML websocket
         });
       } else {
         if (data.weight === undefined) {
@@ -535,20 +460,135 @@ const ShoppingCart = () => {
         setWeights((prev) => ({ ...prev, [data.id]: data.weight }));
 
         // Manejar respuesta de IA en mensaje único
-        const aiMaterialSingle = data.ai_material || data.detected_material;
-        if (aiMaterialSingle) {
-          const parsedSingle: AiResponse = {
-            label: typeof aiMaterialSingle === 'string' ? aiMaterialSingle : aiMaterialSingle.label || aiMaterialSingle.name || String(aiMaterialSingle),
-            confidence: aiMaterialSingle.confidence !== undefined ? Number(aiMaterialSingle.confidence) : undefined,
-            img: aiMaterialSingle.img || undefined,
-          };
-          setAiResponses((prev) => ({ ...prev, [data.id]: parsedSingle }));
-        }
+        // ignore in-band ai_material from weight socket; ML detections are handled by the dedicated ML websocket
       }
     };
 
     return () => ws.close();
   }, []);
+
+  // Keep a ref synchronized with the auto-apply flag so the ML websocket
+  // handler (a long-lived closure) can read the current setting without
+  // needing to recreate the websocket on every toggle.
+  useEffect(() => {
+    useAIAutoApplyRef.current = useAIAutoApply;
+  }, [useAIAutoApply]);
+
+  // ML websocket: listens for material detections (model) and offers/apply suggestions
+  useEffect(() => {
+    if (!ml_ws_ip) return;
+
+    let mlWs: WebSocket | null = null;
+    try {
+      mlWs = new WebSocket(ml_ws_ip);
+    } catch (err) {
+      console.error('Error opening ML websocket', err);
+      return;
+    }
+
+    mlWs.onopen = () => {
+      console.log('ML websocket connected:', ml_ws_ip);
+    };
+
+    mlWs.onmessage = (event) => {
+      let payload: any;
+      try {
+        payload = JSON.parse(event.data);
+      } catch (e) {
+        payload = event.data;
+      }
+
+      const rawDetection = (payload && payload.material) ? payload.material : payload;
+      if (!rawDetection) return;
+
+      const detection = String(rawDetection).trim().toLowerCase();
+
+      // Mapping: PAPER -> 28, PLASTIC -> 57, GLASS -> 58 (match ShoppingCart mapping)
+      let targetValue: number | null = null;
+      if (detection.includes('paper') || detection.includes('papel')) targetValue = 28;
+      if (detection.includes('plastic') || detection.includes('plast')) targetValue = 57;
+      if (detection.includes('glass') || detection.includes('vidrio')) targetValue = 58;
+
+      if (!targetValue) return;
+
+      if (detectionDebounceTimeout.current) {
+        clearTimeout(detectionDebounceTimeout.current);
+      }
+
+      setLastDetectionLabel(String(rawDetection).toUpperCase());
+
+      detectionDebounceTimeout.current = setTimeout(() => {
+        if (lastAppliedMaterial.current === targetValue) {
+          setPendingDetectedMaterial(targetValue);
+          return;
+        }
+
+        setPendingDetectedMaterial(targetValue);
+
+        if (useAIAutoApplyRef.current) {
+          const matched = materials.find((m) => Number(m.value) === Number(targetValue));
+          if (matched) {
+            const scaleId = scales[0]?.id || 1;
+            setSelectedMaterials((prev) => ({ ...prev, [scaleId]: matched.label }));
+            if (lastAppliedMaterial.current !== targetValue) {
+              showToast(`Sugerencia IA aplicada: ${matched.label}`);
+              lastAppliedMaterial.current = targetValue;
+            }
+            setPendingDetectedMaterial(null);
+            setLastDetectionLabel(null);
+          }
+        }
+      }, 1000);
+    };
+
+    mlWs.onclose = () => {
+      console.log('ML websocket closed');
+    };
+
+    mlWs.onerror = (err) => {
+      console.error('ML websocket error', err);
+    };
+
+    return () => {
+      if (mlWs) mlWs.close();
+      if (detectionDebounceTimeout.current) clearTimeout(detectionDebounceTimeout.current);
+    };
+  }, [ml_ws_ip, materials]);
+
+  // When materials load, apply any pending detected material (by value) if auto-apply is enabled
+  useEffect(() => {
+    if (!pendingDetectedMaterial) return;
+    if (lastAppliedMaterial.current === pendingDetectedMaterial) return;
+
+    const match = materials.find((m) => Number(m.value) === Number(pendingDetectedMaterial));
+    if (match && useAIAutoApply) {
+      const scaleId = scales[0]?.id || 1;
+      setSelectedMaterials((prev) => ({ ...prev, [scaleId]: match.label }));
+      showToast(`Sugerencia IA aplicada: ${match.label}`);
+      lastAppliedMaterial.current = pendingDetectedMaterial;
+      setPendingDetectedMaterial(null);
+      setLastDetectionLabel(null);
+    }
+  }, [pendingDetectedMaterial, materials, useAIAutoApply]);
+
+  const applyPendingSuggestion = useCallback(() => {
+    if (!pendingDetectedMaterial) return;
+    const match = materials.find((m) => Number(m.value) === Number(pendingDetectedMaterial));
+    if (match) {
+      const scaleId = scales[0]?.id || 1;
+      setSelectedMaterials((prev) => ({ ...prev, [scaleId]: match.label }));
+      showToast(`Sugerencia IA aplicada: ${match.label}`);
+      lastAppliedMaterial.current = pendingDetectedMaterial;
+      setPendingDetectedMaterial(null);
+      setLastDetectionLabel(null);
+      return;
+    }
+
+    // If we reach here, no numeric match was found for the detected material.
+    // Show a clear alert informing that the material is not linked to this client's material list.
+    const label = lastDetectionLabel || String(pendingDetectedMaterial);
+    toast.error(`Material no ligado al cliente: ${label}`);
+  }, [pendingDetectedMaterial, materials]);
 
   useEffect(() => {
     return () => {
@@ -1267,32 +1307,22 @@ const ShoppingCart = () => {
           )}
           
           <div className="flex items-center justify-between mb-4">
-            <h5 className="underline text-16">Basculas</h5>
+            <div className="flex-1">
+              <h5 className="underline text-16">Basculas</h5>
+              <div className="mt-2 text-sm text-slate-500">Sugerencia IA: <span className="font-medium text-slate-800 dark:text-zinc-100">{lastDetectionLabel || '—'}</span></div>
+            </div>
             <div className="flex items-center gap-2">
-              <label className="text-sm text-slate-600 dark:text-zink-200">Umbral IA</label>
-              <input
-                type="number"
-                min={0}
-                max={100}
-                value={aiThresholdPct}
-                onChange={(e) => {
-                  const v = Math.min(100, Math.max(0, parseInt(e.target.value || '0')));
-                  setAiThresholdPct(isNaN(v) ? 0 : v);
-                }}
-                className="w-20 h-8 px-2 border rounded text-sm text-slate-700 dark:text-zink-100 bg-white dark:bg-zink-700 border-slate-200 dark:border-zink-500"
-              />
               <button
-                onClick={simulateDetections}
-                className="btn bg-emerald-500 text-white text-sm px-2 py-1 rounded hover:bg-emerald-600"
+                onClick={applyPendingSuggestion}
+                disabled={!pendingDetectedMaterial}
+                className={`btn text-sm px-2 py-1 rounded ${pendingDetectedMaterial ? 'bg-sky-500 text-white hover:bg-sky-600' : 'bg-slate-50 dark:bg-zink-700 text-slate-400 cursor-not-allowed border border-slate-100 dark:border-zink-700'}`}
               >
-                Simular detección
+                Aplicar sugerencia
               </button>
-              <button
-                onClick={clearSimulatedDetections}
-                className="btn bg-slate-100 text-slate-700 text-sm px-2 py-1 rounded hover:bg-slate-200 dark:bg-zink-600 dark:text-zink-100"
-              >
-                Limpiar
-              </button>
+              <label className="inline-flex items-center gap-2 text-sm text-slate-500">
+                <input type="checkbox" checked={useAIAutoApply} onChange={(e) => setUseAIAutoApply(e.target.checked)} className="form-checkbox" />
+                <span className="whitespace-nowrap">Aplicar automáticamente</span>
+              </label>
             </div>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
@@ -1344,7 +1374,6 @@ const ShoppingCart = () => {
             />
           </div>
           {scales.map((scale) => {
-            const ai = aiResponses[scale.id];
             return (
             <div key={scale.id} className="card p-4 mb-4 bg-white shadow rounded-lg">
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -1352,57 +1381,7 @@ const ShoppingCart = () => {
                 <div>
                   <h5>{scale.name}</h5>
                   <p className="text-slate-500">Peso: {weights[scale.id] || 0} kg</p>
-                  {/* Visualización de la respuesta del modelo de IA (si existe) */}
-                  {ai && (
-                    <div className="mt-2 p-2 border rounded-md bg-slate-50 dark:bg-zink-700 dark:border-zink-500">
-                      <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  {ai.img && (
-                                    <img src={ai.img} alt={ai.label} className="w-7 h-7 rounded-full" />
-                                  )}
-                                  <div>
-                                    <div className="flex items-center gap-2">
-                                      <div className="text-sm font-medium text-slate-700 dark:text-zink-100">Detectado: {ai.label}</div>
-                                      {ai.confidence !== undefined && (
-                                        (() => {
-                                          const pct = Math.round((ai.confidence || 0) * 100);
-                                          const above = pct >= aiThresholdPct;
-                                          return (
-                                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${above ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30' : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30'}`}>
-                                              {pct}%
-                                            </span>
-                                          );
-                                        })()
-                                      )}
-                                    </div>
-                                    {ai.confidence !== undefined && ai.confidence < (aiThresholdPct / 100) && (
-                                      <div className="text-xs text-yellow-600 dark:text-yellow-400">Confianza por debajo del umbral</div>
-                                    )}
-                                  </div>
-                                </div>
-                                <div>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      // Intentar mapear la etiqueta de la IA a un material registrado
-                                      const mapped = mapAiLabelToMaterial(ai.label);
-                                      if (mapped) {
-                                        setSelectedMaterials({ ...selectedMaterials, [scale.id]: mapped });
-                                        showToast(`Material mapeado: ${mapped}`);
-                                      } else {
-                                        // fallback: usar la etiqueta cruda
-                                        setSelectedMaterials({ ...selectedMaterials, [scale.id]: ai.label });
-                                        showToast('No se encontró correspondencia; se usó la etiqueta de IA');
-                                      }
-                                    }}
-                                    className="text-xs bg-blue-500 text-white px-2 py-1 rounded-md hover:bg-blue-600"
-                                  >
-                                    Usar detección
-                                  </button>
-                                </div>
-                      </div>
-                    </div>
-                  )}
+                  {/* Per-scale IA detection UI removed; use the top 'Aplicar sugerencia' flow instead */}
                   <Select
                     options={materials}
                     isSearchable={true}
