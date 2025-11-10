@@ -21,7 +21,7 @@ import { Link } from "react-router-dom";
 
 const Login = (props: any) => {
 
-    document.title = "INICIO DE SESION | IRON CAT RECYCLING";
+    document.title = "INICIO DE SESION | FLE";
 
     const dispatch = useDispatch<any>();
 

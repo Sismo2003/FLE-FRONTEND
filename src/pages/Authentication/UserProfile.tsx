@@ -148,7 +148,7 @@ const InfoItem = ({ label, value, icon }: { label: string; value: string | numbe
 );
 
 const UserProfile = () => {
-  document.title = "Perfil | Iron Cat Recicladora";
+  document.title = "Perfil | FLE";
 
   const selectProfileState = createSelector(
     (state: any) => state.Profile,

@@ -7,7 +7,7 @@ interface BreadCrumbProps {
 }
 const BreadCrumb = ({ title, pageTitle }: BreadCrumbProps) => {
 
-    document.title = `${title} | Iron Cat Recicladora`;
+    document.title = `${title} | FLE`;
 
     return (
         <React.Fragment>
